@@ -18,14 +18,12 @@ public class Worker extends Thread {
     private final Selector selector;
     private final AtomicInteger clientCount = new AtomicInteger(0);
     private final ConcurrentHashMap<SocketChannel, ClientSession> clients = new ConcurrentHashMap<>();
-    private final ScreenCaptureThread screenCaptureThread;
     private volatile boolean running = true;
-    private int lastSentFrameCount = 0;
+    private long lastSentFrameSeq = -1;
 
-    public Worker(ScreenCaptureThread screenCaptureThread) throws IOException {
+    public Worker() throws IOException {
         super("Worker-" + System.currentTimeMillis());
         this.selector = Selector.open();
-        this.screenCaptureThread = screenCaptureThread;
         setDaemon(true);
     }
 
@@ -70,12 +68,11 @@ public class Worker extends Thread {
     }
 
     private void sendLatestFrameToReadyClients() {
-        byte[] latestFrame = screenCaptureThread.getLatestFrame();
-        int currentFrameCount = screenCaptureThread.getFrameCount();
+        Frame latestFrame = Screen.latest;
 
         // Chỉ gửi nếu có frame mới
-        if (latestFrame != null && currentFrameCount != lastSentFrameCount) {
-            lastSentFrameCount = currentFrameCount;
+        if (latestFrame != null && latestFrame.seq != lastSentFrameSeq) {
+            lastSentFrameSeq = latestFrame.seq;
 
             for (ClientSession session : clients.values()) {
                 if (session.canWrite()) {
@@ -205,11 +202,14 @@ public class Worker extends Thread {
             this.key = key;
         }
 
-        public void prepareFrame(byte[] frameData) {
+        public void prepareFrame(Frame frame) {
             if (!hasFrameToSend) { // Drop frame cũ nếu chưa gửi xong
-                writeBuffer = ByteBuffer.allocate(4 + frameData.length);
-                writeBuffer.putInt(frameData.length);
-                writeBuffer.put(frameData);
+                // Protocol: seq(8) + tsMillis(8) + length(4) + jpeg_data
+                writeBuffer = ByteBuffer.allocate(20 + frame.jpeg.length);
+                writeBuffer.putLong(frame.seq);
+                writeBuffer.putLong(frame.tsMillis);
+                writeBuffer.putInt(frame.jpeg.length);
+                writeBuffer.put(frame.jpeg);
                 writeBuffer.flip();
                 hasFrameToSend = true;
 

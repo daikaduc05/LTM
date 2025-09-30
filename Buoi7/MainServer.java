@@ -21,7 +21,7 @@ public class MainServer {
 
     private ServerSocketChannel serverChannel;
     private Selector selector;
-    private ScreenCaptureThread screenCaptureThread;
+    private Screen screenCaptureThread;
     private List<Worker> workers;
     private LoadBalancer loadBalancer;
     private ScheduledExecutorService statsScheduler;
@@ -54,8 +54,8 @@ public class MainServer {
     }
 
     private void initializeServer() throws IOException {
-        // Khởi tạo ScreenCaptureThread
-        screenCaptureThread = new ScreenCaptureThread();
+        // Khởi tạo Screen pipeline
+        screenCaptureThread = new Screen();
         screenCaptureThread.start();
 
         // Khởi tạo ServerSocketChannel với NIO
@@ -75,7 +75,7 @@ public class MainServer {
 
         // Tạo các Worker threads
         for (int i = 0; i < WORKER_COUNT; i++) {
-            Worker worker = new Worker(screenCaptureThread);
+            Worker worker = new Worker();
             workers.add(worker);
             worker.start();
         }
@@ -90,7 +90,7 @@ public class MainServer {
         statsScheduler = Executors.newScheduledThreadPool(1);
         statsScheduler.scheduleAtFixedRate(() -> {
             System.out.println("\n" + loadBalancer.getLoadStats());
-            System.out.println("Screen frames captured: " + screenCaptureThread.getFrameCount());
+            System.out.println("Screen frames captured: " + Screen.seq.get());
         }, 30, 30, TimeUnit.SECONDS);
     }
 

@@ -27,7 +27,7 @@ public class ScreenClient extends JFrame {
 		this.setSize(500, 400);
 		this.setDefaultCloseOperation(3);
 		try {
-			soc = new Socket("localhost",2345);
+			soc = new Socket("172.16.1.239",2345);
 		} catch(Exception e) {
 			System.exit(1);
 		}
