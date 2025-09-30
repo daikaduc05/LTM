@@ -1,60 +1,112 @@
 package Buoi7;
 
-import java.awt.Graphics;
-import java.awt.Image;
-import java.awt.Rectangle;
-import java.awt.Robot;
-import java.awt.Toolkit;
-import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.net.Socket;
-
 import javax.imageio.ImageIO;
-import javax.swing.JFrame;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.net.Socket;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-public class ScreenClient extends JFrame {
-	Socket soc;
-	public static void main(String[] args) {
-		new ScreenClient();
-	}
-	int off = 50;
-	public ScreenClient() {
-		this.setTitle("Share Screen");
-		this.setSize(500, 400);
-		this.setDefaultCloseOperation(3);
-		try {
-			soc = new Socket("172.16.1.239",2345);
-		} catch(Exception e) {
-			System.exit(1);
-		}
+class ViewerPanel extends JPanel {
+	volatile BufferedImage lastRendered;
 
-		this.setVisible(true);
+	ViewerPanel() {
+		setBackground(Color.BLACK);
+		setDoubleBuffered(true);
 	}
 
-	public void paint(Graphics g) {
-		try {
-			DataInputStream bis = new DataInputStream(soc.getInputStream());
-			int n = bis.readInt();
-			byte tmp[] = bis.readNBytes(n);
-			
-			
-			ByteArrayInputStream bis1 = new ByteArrayInputStream(tmp);
-			BufferedImage img1 = ImageIO.read(bis1);
-			int w = this.getWidth()-2*off;
-			int h = this.getHeight()-2*off;
-			Image img2 = img1.getScaledInstance(w,h, Image.SCALE_SMOOTH);
-			
-			g.drawImage(img2, off, off, this.getWidth()-off, this.getHeight()-off, 
-					0, 0, w,h, null);
-			
-			this.repaint();
-		} catch (Exception e) {
-		}
+	@Override
+	protected void paintComponent(Graphics g) {
+		super.paintComponent(g);
+		BufferedImage img = lastRendered;
+		if (img == null)
+			return;
+		// vẽ full panel, server đã scale sẵn nên thao tác này nhẹ
+		g.drawImage(img, 0, 0, getWidth(), getHeight(), null);
+		Toolkit.getDefaultToolkit().sync(); // giảm tearing (nhất là trên X11)
 	}
-
 }
 
+public class ScreenClient extends JFrame {
+	private Socket soc;
+	private DataInputStream in;
+	private final ViewerPanel panel = new ViewerPanel();
+	private final AtomicBoolean repaintScheduled = new AtomicBoolean(false);
+
+	// thống kê
+	private long recvFrames = 0, recvBytes = 0, recvLastMs = System.currentTimeMillis();
+
+	public static void main(String[] args) {
+		SwingUtilities.invokeLater(ScreenClient::new);
+	}
+
+	public ScreenClient() {
+		setTitle("Share Screen - Low Latency Optimized");
+		setDefaultCloseOperation(EXIT_ON_CLOSE);
+		setContentPane(panel);
+		setSize(1000, 650);
+		setLocationRelativeTo(null);
+
+		try {
+			ImageIO.setUseCache(false);
+			soc = new Socket("localhost", 2345);
+			soc.setTcpNoDelay(true);
+			in = new DataInputStream(soc.getInputStream());
+			System.out.println("Connected to server: " + soc.getRemoteSocketAddress());
+		} catch (Exception e) {
+			System.err.println("Failed to connect to server: " + e.getMessage());
+			e.printStackTrace();
+			System.exit(1);
+			return;
+		}
+
+		Thread reader = new Thread(this::readerLoop, "reader");
+		reader.setDaemon(true);
+		reader.start();
+
+		setVisible(true);
+	}
+
+	private void readerLoop() {
+		try {
+			while (true) {
+				long seq = in.readLong();
+				long ts = in.readLong();
+				int n = in.readInt();
+				byte[] buf = in.readNBytes(n);
+
+				recvFrames++;
+				recvBytes += n;
+
+				BufferedImage img = ImageIO.read(new ByteArrayInputStream(buf));
+				panel.lastRendered = img;
+
+				// latency thực tế
+				long latency = System.currentTimeMillis() - ts;
+
+				long now = System.currentTimeMillis();
+				if (now - recvLastMs >= 1000) {
+					double fps = recvFrames * 1000.0 / (now - recvLastMs);
+					double mbps = (recvBytes * 8.0) / 1_000_000.0;
+					System.out.printf("[CLIENT] recvFPS=%.1f, recvMbps=%.2f, latency~%d ms, lastSeq=%d%n",
+							fps, mbps, latency, seq);
+					recvFrames = 0;
+					recvBytes = 0;
+					recvLastMs = now;
+				}
+
+				// "đến là vẽ" nhưng không spam EDT
+				if (repaintScheduled.compareAndSet(false, true)) {
+					SwingUtilities.invokeLater(() -> {
+						panel.repaint();
+						repaintScheduled.set(false);
+					});
+				}
+			}
+		} catch (Exception e) {
+			System.out.println("[CLIENT] Disconnected: " + e.getMessage());
+		}
+	}
+}
