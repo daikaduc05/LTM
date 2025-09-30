@@ -53,7 +53,7 @@ class Screen extends Thread {
             try {
                 BufferedImage img = r.createScreenCapture(capture);
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                ImageIO.write(img, "png", bos);
+                ImageIO.write(img, "jpg", bos);
                 bos.flush();
                 tmp = bos.toByteArray();
                 count++;
